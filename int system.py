@@ -1,0 +1,1204 @@
+import tkinter as tk
+import networkx as nx
+from tkinter import ttk, filedialog, messagebox
+import random
+import json
+from math import sqrt
+from collections import defaultdict
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import numpy as np
+from scipy.spatial.distance import pdist, squareform
+from scipy.cluster.hierarchy import linkage, dendrogram
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, classification_report
+
+class IntDecisionSystem:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Интеллектуальная система поддержки принятия решений")
+        self.root.geometry("1400x900")
+        
+        # Настройка цветовой схемы
+        self.colors = {
+            'bg': '#1e1e1e',
+            'fg': '#ffffff',
+            'accent': '#4a90e2',
+            'success': '#27ae60',
+            'warning': '#e74c3c',
+            'panel_bg': '#2d2d2d',
+            'button_bg': '#3c3c3c',
+            'button_hover': '#4a90e2',
+            'tree_bg': '#252525',
+            'tree_header': '#4a90e2'
+        }
+        
+        # Настройка параметров matplotlib
+        plt.rcParams['figure.dpi'] = 100
+        plt.rcParams['figure.figsize'] = (12, 8)
+        plt.rcParams['font.size'] = 10
+        plt.rcParams['axes.titlesize'] = 12
+        plt.rcParams['axes.labelsize'] = 10
+        
+        # Основные данные
+        self.ints = []
+        self.metrics = []
+        self.categories = []
+        self.experimental_data = {}
+        self.weights = {}
+        self.model = None
+        self.scaler = StandardScaler()
+        self.model_accuracy = 0
+        self.model_report = ""
+        
+        # Данные для ML (ручное назначение категорий)
+        self.manual_categories = {}
+        
+        # Переменные для масштабирования графиков
+        self.tree_zoom_level = 1.0
+        self.dendro_zoom_level = 1.0
+        self.current_tree_fig = None
+        self.current_dendro_fig = None
+        
+        # Создание интерфейса
+        self.create_widgets()
+        self.load_sample_data()
+
+    def create_widgets(self):
+        # Основной контейнер
+        main_container = tk.Frame(self.root, bg=self.colors['bg'])
+        main_container.pack(fill=tk.BOTH, expand=True)
+        
+        # Верхняя панель с заголовком
+        header_frame = tk.Frame(main_container, bg=self.colors['accent'], height=70)
+        header_frame.pack(fill=tk.X)
+        header_frame.pack_propagate(False)
+        
+        title_label = tk.Label(header_frame, text="🧠 ИНТЕЛЛЕКТУАЛЬНАЯ СИСТЕМА ПОДДЕРЖКИ ПРИНЯТИЯ РЕШЕНИЙ",
+                               font=('Arial', 18, 'bold'), bg=self.colors['accent'], fg='white')
+        title_label.pack(expand=True)
+        
+        # Основное содержимое
+        content_frame = tk.Frame(main_container, bg=self.colors['bg'])
+        content_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Левая панель - параметры
+        left_panel = tk.Frame(content_frame, bg=self.colors['panel_bg'], relief=tk.RAISED, bd=1)
+        left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=5)
+        
+        # Правая панель - результаты
+        right_panel = tk.Frame(content_frame, bg=self.colors['bg'])
+        right_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5)
+        
+        # Создание левой панели
+        self.create_left_panel(left_panel)
+        
+        # Создание правой панели
+        self.create_right_panel(right_panel)
+
+    def create_left_panel(self, parent):
+        # Создаем Canvas с прокруткой
+        canvas = tk.Canvas(parent, bg=self.colors['panel_bg'], highlightthickness=0)
+        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+        scrollable_frame = tk.Frame(canvas, bg=self.colors['panel_bg'])
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # ИНФОРМАЦИОННЫЕ ОБЪЕКТЫ
+        ints_frame = tk.LabelFrame(scrollable_frame, text="📊 ИНФОРМАЦИОННЫЕ ОБЪЕКТЫ", 
+                                  font=('Arial', 10, 'bold'), bg=self.colors['panel_bg'], 
+                                  fg=self.colors['fg'], padx=5, pady=5)
+        ints_frame.pack(fill=tk.X, pady=5, padx=5)
+        
+        self.ints_listbox = tk.Listbox(ints_frame, height=6, bg=self.colors['tree_bg'], 
+                                       fg=self.colors['fg'], selectbackground=self.colors['accent'],
+                                       font=('Arial', 9))
+        self.ints_listbox.pack(fill=tk.X)
+        
+        add_int_frame = tk.Frame(ints_frame, bg=self.colors['panel_bg'])
+        add_int_frame.pack(fill=tk.X, pady=5)
+        
+        self.int_entry = tk.Entry(add_int_frame, bg=self.colors['tree_bg'], fg=self.colors['fg'],
+                                  font=('Arial', 9))
+        self.int_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        tk.Button(add_int_frame, text="➕ Добавить", command=self.add_int,
+                 bg=self.colors['button_bg'], fg=self.colors['fg'], 
+                 activebackground=self.colors['button_hover']).pack(side=tk.LEFT, padx=5)
+        tk.Button(ints_frame, text="🗑️ Очистить", command=self.clear_ints,
+                 bg=self.colors['button_bg'], fg=self.colors['fg']).pack(fill=tk.X, pady=2)
+        
+        # ПОКАЗАТЕЛИ
+        metrics_frame = tk.LabelFrame(scrollable_frame, text="📈 ПОКАЗАТЕЛИ", 
+                                     font=('Arial', 10, 'bold'), bg=self.colors['panel_bg'], 
+                                     fg=self.colors['fg'], padx=5, pady=5)
+        metrics_frame.pack(fill=tk.X, pady=5, padx=5)
+        
+        self.metrics_listbox = tk.Listbox(metrics_frame, height=6, bg=self.colors['tree_bg'], 
+                                         fg=self.colors['fg'], selectbackground=self.colors['accent'],
+                                         font=('Arial', 9))
+        self.metrics_listbox.pack(fill=tk.X)
+        
+        add_metric_frame = tk.Frame(metrics_frame, bg=self.colors['panel_bg'])
+        add_metric_frame.pack(fill=tk.X, pady=5)
+        
+        self.metric_entry = tk.Entry(add_metric_frame, bg=self.colors['tree_bg'], fg=self.colors['fg'],
+                                    font=('Arial', 9))
+        self.metric_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        tk.Button(add_metric_frame, text="➕ Добавить", command=self.add_metric,
+                 bg=self.colors['button_bg'], fg=self.colors['fg']).pack(side=tk.LEFT, padx=5)
+        tk.Button(metrics_frame, text="🗑️ Очистить", command=self.clear_metrics,
+                 bg=self.colors['button_bg'], fg=self.colors['fg']).pack(fill=tk.X, pady=2)
+        
+        # КАТЕГОРИИ
+        categories_frame = tk.LabelFrame(scrollable_frame, text="🏷️ КАТЕГОРИИ", 
+                                        font=('Arial', 10, 'bold'), bg=self.colors['panel_bg'], 
+                                        fg=self.colors['fg'], padx=5, pady=5)
+        categories_frame.pack(fill=tk.X, pady=5, padx=5)
+        
+        self.categories_listbox = tk.Listbox(categories_frame, height=4, bg=self.colors['tree_bg'], 
+                                            fg=self.colors['fg'], selectbackground=self.colors['accent'],
+                                            font=('Arial', 9))
+        self.categories_listbox.pack(fill=tk.X)
+        
+        add_category_frame = tk.Frame(categories_frame, bg=self.colors['panel_bg'])
+        add_category_frame.pack(fill=tk.X, pady=5)
+        
+        self.category_entry = tk.Entry(add_category_frame, bg=self.colors['tree_bg'], fg=self.colors['fg'],
+                                      font=('Arial', 9))
+        self.category_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        tk.Button(add_category_frame, text="➕ Добавить", command=self.add_category,
+                 bg=self.colors['button_bg'], fg=self.colors['fg']).pack(side=tk.LEFT, padx=5)
+        tk.Button(categories_frame, text="🗑️ Очистить", command=self.clear_categories,
+                 bg=self.colors['button_bg'], fg=self.colors['fg']).pack(fill=tk.X, pady=2)
+        
+        # ВЕСА ПОКАЗАТЕЛЕЙ (MCDM)
+        weights_frame = tk.LabelFrame(scrollable_frame, text="⚖️ ВЕСА ПОКАЗАТЕЛЕЙ (MCDM)", 
+                                     font=('Arial', 10, 'bold'), bg=self.colors['panel_bg'], 
+                                     fg=self.colors['fg'], padx=5, pady=5)
+        weights_frame.pack(fill=tk.X, pady=5, padx=5)
+        
+        self.weights_tree = ttk.Treeview(weights_frame, columns=("weight",), height=4)
+        self.weights_tree.heading("#0", text="Показатель")
+        self.weights_tree.heading("weight", text="Вес")
+        self.weights_tree.column("#0", width=130)
+        self.weights_tree.column("weight", width=80)
+        self.weights_tree.pack(fill=tk.X)
+        
+        tk.Button(weights_frame, text="⚖️ Установить равные веса", command=self.set_default_weights,
+                 bg=self.colors['button_bg'], fg=self.colors['fg']).pack(fill=tk.X, pady=2)
+        
+        # ДЕЙСТВИЯ
+        action_frame = tk.LabelFrame(scrollable_frame, text="🎯 ДЕЙСТВИЯ", 
+                                    font=('Arial', 10, 'bold'), bg=self.colors['panel_bg'], 
+                                    fg=self.colors['fg'], padx=5, pady=5)
+        action_frame.pack(fill=tk.X, pady=5, padx=5)
+        
+        actions = [
+            ("📂 Загрузить данные", self.load_data),
+            ("💾 Сохранить данные", self.save_data),
+            ("🎲 Случайные значения", self.generate_random_data),
+            ("🌲 Остовное дерево", self.draw_spanning_tree),
+            ("📊 Дендрограмма", self.draw_dendrogram),
+            ("🤖 ML / Обучение модели", self.train_model),
+            ("🔮 ML / Прогноз", self.predict),
+            ("💡 Принять решение (MCDM)", self.make_decision),
+            ("📄 Вывести отчет", self.generate_report)
+        ]
+        
+        for text, command in actions:
+            btn = tk.Button(action_frame, text=text, command=command,
+                           bg=self.colors['button_bg'], fg=self.colors['fg'],
+                           activebackground=self.colors['button_hover'],
+                           activeforeground='white',
+                           font=('Arial', 9, 'bold'), height=1,
+                           relief=tk.RAISED, bd=1)
+            btn.pack(fill=tk.X, pady=2)
+            
+            def on_enter(e, button=btn):
+                button['background'] = self.colors['button_hover']
+            
+            def on_leave(e, button=btn):
+                button['background'] = self.colors['button_bg']
+            
+            btn.bind("<Enter>", on_enter)
+            btn.bind("<Leave>", on_leave)
+
+    def create_right_panel(self, parent):
+        # Таблица с данными
+        self.table_frame = tk.LabelFrame(parent, text="📋 ТАБЛИЦА ДАННЫХ (ОСНОВНАЯ ОБЛАСТЬ)", 
+                                        font=('Arial', 11, 'bold'), bg=self.colors['panel_bg'], 
+                                        fg=self.colors['fg'], padx=10, pady=10)
+        self.table_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Результаты визуализации (вкладки)
+        self.notebook = ttk.Notebook(parent)
+        self.notebook.pack(fill=tk.BOTH, expand=True, pady=5)
+        
+        # Настройка стиля для notebook
+        style = ttk.Style()
+        style.theme_use('clam')
+        style.configure('TNotebook', background=self.colors['bg'])
+        style.configure('TNotebook.Tab', background=self.colors['button_bg'], 
+                       foreground=self.colors['fg'], padding=[15, 5], font=('Arial', 9))
+        style.map('TNotebook.Tab', background=[('selected', self.colors['accent'])])
+        
+        # Вкладка для остовного дерева
+        self.tree_container = tk.Frame(self.notebook, bg=self.colors['bg'])
+        self.notebook.add(self.tree_container, text="🌲 Остовное дерево")
+        
+        # Панель инструментов для остовного дерева
+        tree_toolbar = tk.Frame(self.tree_container, bg=self.colors['panel_bg'], height=40)
+        tree_toolbar.pack(fill=tk.X, padx=5, pady=5)
+        tree_toolbar.pack_propagate(False)
+        
+        tk.Button(tree_toolbar, text="🔍 Zoom In (+)", command=self.zoom_tree_in,
+                 bg=self.colors['button_bg'], fg=self.colors['fg'],
+                 activebackground=self.colors['button_hover']).pack(side=tk.LEFT, padx=5)
+        tk.Button(tree_toolbar, text="🔍 Zoom Out (-)", command=self.zoom_tree_out,
+                 bg=self.colors['button_bg'], fg=self.colors['fg'],
+                 activebackground=self.colors['button_hover']).pack(side=tk.LEFT, padx=5)
+        tk.Button(tree_toolbar, text="🔄 Сбросить масштаб", command=self.reset_tree_zoom,
+                 bg=self.colors['button_bg'], fg=self.colors['fg'],
+                 activebackground=self.colors['button_hover']).pack(side=tk.LEFT, padx=5)
+        
+        self.tree_zoom_label = tk.Label(tree_toolbar, text="Масштаб: 100%", 
+                                        bg=self.colors['panel_bg'], fg=self.colors['fg'],
+                                        font=('Arial', 9))
+        self.tree_zoom_label.pack(side=tk.LEFT, padx=20)
+        
+        # Создаём canvas с прокруткой для остовного дерева
+        self.tree_canvas = tk.Canvas(self.tree_container, bg=self.colors['bg'], highlightthickness=0)
+        tree_scrollbar_y = ttk.Scrollbar(self.tree_container, orient="vertical", command=self.tree_canvas.yview)
+        tree_scrollbar_x = ttk.Scrollbar(self.tree_container, orient="horizontal", command=self.tree_canvas.xview)
+        self.tree_scrollable_frame = tk.Frame(self.tree_canvas, bg=self.colors['bg'])
+        
+        self.tree_scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.tree_canvas.configure(scrollregion=self.tree_canvas.bbox("all"))
+        )
+        
+        self.tree_canvas.create_window((0, 0), window=self.tree_scrollable_frame, anchor="nw")
+        self.tree_canvas.configure(yscrollcommand=tree_scrollbar_y.set, xscrollcommand=tree_scrollbar_x.set)
+        
+        self.tree_canvas.pack(side="left", fill="both", expand=True)
+        tree_scrollbar_y.pack(side="right", fill="y")
+        tree_scrollbar_x.pack(side="bottom", fill="x")
+        
+        # Вкладка для дендрограммы
+        self.dendro_container = tk.Frame(self.notebook, bg=self.colors['bg'])
+        self.notebook.add(self.dendro_container, text="📊 Дендрограмма")
+        
+        # Панель инструментов для дендрограммы
+        dendro_toolbar = tk.Frame(self.dendro_container, bg=self.colors['panel_bg'], height=40)
+        dendro_toolbar.pack(fill=tk.X, padx=5, pady=5)
+        dendro_toolbar.pack_propagate(False)
+        
+        tk.Button(dendro_toolbar, text="🔍 Zoom In (+)", command=self.zoom_dendro_in,
+                 bg=self.colors['button_bg'], fg=self.colors['fg'],
+                 activebackground=self.colors['button_hover']).pack(side=tk.LEFT, padx=5)
+        tk.Button(dendro_toolbar, text="🔍 Zoom Out (-)", command=self.zoom_dendro_out,
+                 bg=self.colors['button_bg'], fg=self.colors['fg'],
+                 activebackground=self.colors['button_hover']).pack(side=tk.LEFT, padx=5)
+        tk.Button(dendro_toolbar, text="🔄 Сбросить масштаб", command=self.reset_dendro_zoom,
+                 bg=self.colors['button_bg'], fg=self.colors['fg'],
+                 activebackground=self.colors['button_hover']).pack(side=tk.LEFT, padx=5)
+        
+        self.dendro_zoom_label = tk.Label(dendro_toolbar, text="Масштаб: 100%", 
+                                          bg=self.colors['panel_bg'], fg=self.colors['fg'],
+                                          font=('Arial', 9))
+        self.dendro_zoom_label.pack(side=tk.LEFT, padx=20)
+        
+        # Создаём canvas с прокруткой для дендрограммы
+        self.dendro_canvas = tk.Canvas(self.dendro_container, bg=self.colors['bg'], highlightthickness=0)
+        dendro_scrollbar_y = ttk.Scrollbar(self.dendro_container, orient="vertical", command=self.dendro_canvas.yview)
+        dendro_scrollbar_x = ttk.Scrollbar(self.dendro_container, orient="horizontal", command=self.dendro_canvas.xview)
+        self.dendro_scrollable_frame = tk.Frame(self.dendro_canvas, bg=self.colors['bg'])
+        
+        self.dendro_scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.dendro_canvas.configure(scrollregion=self.dendro_canvas.bbox("all"))
+        )
+        
+        self.dendro_canvas.create_window((0, 0), window=self.dendro_scrollable_frame, anchor="nw")
+        self.dendro_canvas.configure(yscrollcommand=dendro_scrollbar_y.set, xscrollcommand=dendro_scrollbar_x.set)
+        
+        self.dendro_canvas.pack(side="left", fill="both", expand=True)
+        dendro_scrollbar_y.pack(side="right", fill="y")
+        dendro_scrollbar_x.pack(side="bottom", fill="x")
+        
+        # Остальные вкладки
+        self.ml_tab = tk.Frame(self.notebook, bg=self.colors['bg'])
+        self.notebook.add(self.ml_tab, text="🤖 ML результаты")
+        
+        self.decision_tab = tk.Frame(self.notebook, bg=self.colors['bg'])
+        self.notebook.add(self.decision_tab, text="💡 Рекомендации")
+        
+        # Изначально таблица пуста
+        self.clear_table()
+
+    def clear_table(self):
+        for widget in self.table_frame.winfo_children():
+            widget.destroy()
+        
+        label = tk.Label(self.table_frame, text="📭 Данные не загружены\n\nНажмите 'Случайные значения' для генерации данных\n\n💡 Двойной клик по ячейке - редактирование", 
+                        font=('Arial', 12), bg=self.colors['panel_bg'], fg=self.colors['fg'], justify=tk.CENTER)
+        label.pack(expand=True)
+
+    def update_table(self):
+        """Таблица с возможностью редактирования"""
+        for widget in self.table_frame.winfo_children():
+            widget.destroy()
+        
+        if not self.ints or not self.metrics:
+            self.clear_table()
+            return
+        
+        # Создаем Canvas с прокруткой для таблицы
+        canvas = tk.Canvas(self.table_frame, bg=self.colors['panel_bg'], highlightthickness=0)
+        scrollbar_y = ttk.Scrollbar(self.table_frame, orient="vertical", command=canvas.yview)
+        scrollbar_x = ttk.Scrollbar(self.table_frame, orient="horizontal", command=canvas.xview)
+        canvas.configure(yscrollcommand=scrollbar_y.set, xscrollcommand=scrollbar_x.set)
+        
+        table_frame = tk.Frame(canvas, bg=self.colors['panel_bg'])
+        table_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        
+        canvas.create_window((0, 0), window=table_frame, anchor="nw")
+        
+        # Создаем заголовки
+        headers = ["Информационный объект"] + self.metrics + ["🏷️ Категория (выберите из списка)"]
+        for col, header in enumerate(headers):
+            label = tk.Label(table_frame, text=header, font=('Arial', 10, 'bold'),
+                           bg=self.colors['accent'], fg='white', padx=10, pady=5,
+                           relief=tk.RAISED)
+            label.grid(row=0, column=col, sticky="nsew", padx=1, pady=1)
+        
+        # Добавляем данные
+        for row, int_obj in enumerate(self.ints, 1):
+            # Информационный объект
+            obj_label = tk.Label(table_frame, text=int_obj, font=('Arial', 9),
+                               bg=self.colors['tree_bg'], fg=self.colors['fg'], 
+                               padx=10, pady=5, relief=tk.RAISED)
+            obj_label.grid(row=row, column=0, sticky="nsew", padx=1, pady=1)
+            
+            # Значения показателей
+            for col, metric in enumerate(self.metrics, 1):
+                value = self.experimental_data.get(int_obj, {}).get(metric, 0)
+                
+                # Определяем цвет фона
+                if value >= 80:
+                    bg_color = '#27ae60'
+                elif value >= 50:
+                    bg_color = '#f39c12'
+                else:
+                    bg_color = '#e74c3c'
+                
+                # Создаем Label с возможностью редактирования
+                value_label = tk.Label(table_frame, text=str(value), font=('Arial', 9, 'bold'),
+                                      bg=bg_color, fg='white', padx=10, pady=5,
+                                      relief=tk.RAISED, cursor="hand2")
+                value_label.grid(row=row, column=col, sticky="nsew", padx=1, pady=1)
+                
+                # Привязываем двойной клик для редактирования
+                value_label.bind("<Double-Button-1>", lambda e, obj=int_obj, met=metric, lbl=value_label, fr=table_frame: 
+                                self.edit_cell(obj, met, lbl, fr))
+            
+            # Категория (выпадающий список прямо в таблице) - ИСПРАВЛЕНО!
+            current_category = self.manual_categories.get(int_obj, "")
+            # Добавляем опцию "Нет категории" в начало списка
+            category_values = ["(Нет категории)"] + self.categories
+            category_combo = ttk.Combobox(table_frame, values=category_values, 
+                                         state="readonly", width=15, font=('Arial', 9))
+            if current_category:
+                category_combo.set(current_category)
+            else:
+                category_combo.set("(Нет категории)")
+            category_combo.grid(row=row, column=len(self.metrics)+1, sticky="nsew", padx=1, pady=1)
+            
+            # Цвет текста комбобокса
+            if current_category:
+                category_combo.configure(foreground=self.colors['success'])
+            else:
+                category_combo.configure(foreground=self.colors['warning'])
+            
+            # Привязываем событие изменения категории
+            category_combo.bind("<<ComboboxSelected>>", lambda e, obj=int_obj, combo=category_combo:
+                               self.update_category_from_table(obj, combo.get()))
+        
+        # Настройка весов столбцов
+        for col in range(len(headers)):
+            table_frame.grid_columnconfigure(col, weight=1)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar_y.pack(side="right", fill="y")
+        scrollbar_x.pack(side="bottom", fill="x")
+
+    def edit_cell(self, obj, metric, label, parent_frame):
+        """Редактирование ячейки таблицы"""
+        # Получаем позицию
+        row = label.grid_info()['row']
+        col = label.grid_info()['column']
+        
+        # Создаем Entry для редактирования
+        entry = tk.Entry(parent_frame, bg=self.colors['tree_bg'], fg=self.colors['fg'],
+                         font=('Arial', 9), justify='center')
+        current_value = self.experimental_data.get(obj, {}).get(metric, 0)
+        entry.insert(0, str(current_value))
+        entry.grid(row=row, column=col, sticky="nsew", padx=1, pady=1)
+        
+        # Удаляем Label
+        label.destroy()
+        
+        # Фокусируемся на Entry
+        entry.focus()
+        
+        def save_edit(event=None):
+            try:
+                new_value = int(entry.get())
+                if 0 <= new_value <= 100:
+                    self.experimental_data[obj][metric] = new_value
+                    self.model = None  # Сбрасываем модель при изменении данных
+                    self.update_table()  # Обновляем таблицу
+                else:
+                    messagebox.showwarning("Ошибка", "❌ Значение должно быть от 0 до 100")
+                    self.update_table()
+            except ValueError:
+                messagebox.showwarning("Ошибка", "❌ Введите целое число")
+                self.update_table()
+        
+        def cancel_edit(event=None):
+            self.update_table()
+        
+        entry.bind("<Return>", save_edit)
+        entry.bind("<Escape>", cancel_edit)
+        entry.bind("<FocusOut>", save_edit)
+
+    def update_category_from_table(self, obj, category):
+        """Обновление категории из таблицы - ИСПРАВЛЕНО!"""
+        # Если категория не равна опции "(Нет категории)"
+        if category and category != "(Нет категории)":
+            self.manual_categories[obj] = category
+            self.model = None
+            self.update_table()
+        else:
+            # Если выбрано "(Нет категории)" - удаляем категорию
+            if obj in self.manual_categories:
+                del self.manual_categories[obj]
+                self.model = None
+                self.update_table()
+
+    def update_weights_tree(self):
+        for item in self.weights_tree.get_children():
+            self.weights_tree.delete(item)
+        
+        for metric in self.metrics:
+            weight = self.weights.get(metric, 1.0 / len(self.metrics) if self.metrics else 1.0)
+            self.weights_tree.insert("", tk.END, text=metric, values=(f"{weight:.2f}",))
+    
+    def set_default_weights(self):
+        if self.metrics:
+            default_weight = 1.0 / len(self.metrics)
+            for metric in self.metrics:
+                self.weights[metric] = default_weight
+            self.update_weights_tree()
+            messagebox.showinfo("Успех", "✅ Веса установлены равными")
+
+    def add_int(self):
+        int_obj = self.int_entry.get().strip()
+        if int_obj and int_obj not in self.ints:
+            self.ints.append(int_obj)
+            self.ints_listbox.insert(tk.END, int_obj)
+            self.int_entry.delete(0, tk.END)
+            self.update_experimental_data()
+
+    def clear_ints(self):
+        self.ints = []
+        self.ints_listbox.delete(0, tk.END)
+        self.update_experimental_data()
+
+    def add_metric(self):
+        metric = self.metric_entry.get().strip()
+        if metric and metric not in self.metrics:
+            self.metrics.append(metric)
+            self.metrics_listbox.insert(tk.END, metric)
+            self.metric_entry.delete(0, tk.END)
+            if self.metrics:
+                self.weights[metric] = 1.0 / len(self.metrics)
+            self.update_experimental_data()
+
+    def clear_metrics(self):
+        self.metrics = []
+        self.weights = {}
+        self.metrics_listbox.delete(0, tk.END)
+        self.update_experimental_data()
+        self.update_weights_tree()
+
+    def add_category(self):
+        category = self.category_entry.get().strip()
+        if category and category not in self.categories:
+            self.categories.append(category)
+            self.categories_listbox.insert(tk.END, category)
+            self.category_entry.delete(0, tk.END)
+            self.update_table()
+
+    def clear_categories(self):
+        self.categories = []
+        self.categories_listbox.delete(0, tk.END)
+        self.update_table()
+
+    def update_experimental_data(self):
+        new_data = {}
+        for int_obj in self.ints:
+            new_data[int_obj] = {}
+            for metric in self.metrics:
+                new_data[int_obj][metric] = self.experimental_data.get(int_obj, {}).get(metric, 0)
+        
+        self.experimental_data = new_data
+        self.update_table()
+        self.model = None
+
+    def generate_random_data(self):
+        if not self.ints or not self.metrics:
+            messagebox.showwarning("Ошибка", "❌ Добавьте информационные объекты и показатели перед генерацией данных")
+            return
+        
+        for int_obj in self.ints:
+            self.experimental_data[int_obj] = {}
+            for metric in self.metrics:
+                self.experimental_data[int_obj][metric] = random.randint(0, 100)
+        
+        self.update_table()
+        self.model = None
+        messagebox.showinfo("Успех", "✅ Случайные данные сгенерированы")
+
+    def train_model(self):
+        """Обучение модели на основе РУЧНЫХ категорий из таблицы"""
+        if not self.ints or not self.metrics:
+            messagebox.showwarning("Ошибка", "❌ Недостаточно данных для обучения")
+            return
+        
+        # Проверяем, есть ли размеченные объекты
+        labeled_objects = [obj for obj in self.ints if obj in self.manual_categories]
+        
+        if len(labeled_objects) < 3:
+            messagebox.showwarning("Ошибка", 
+                f"❌ Недостаточно размеченных объектов для обучения (нужно минимум 3)\n"
+                f"Размечено: {len(labeled_objects)} из {len(self.ints)}\n\n"
+                f"Для обучения модели:\n"
+                f"1. Выберите категорию для объектов в таблице (последний столбец)\n"
+                f"2. Назначьте категории минимум 3 объектам")
+            return
+        
+        # Подготовка данных
+        X = []
+        y = []
+        
+        for int_obj in labeled_objects:
+            features = [self.experimental_data[int_obj].get(m, 0) for m in self.metrics]
+            X.append(features)
+            y.append(self.manual_categories[int_obj])
+        
+        # Нормализация
+        X_scaled = self.scaler.fit_transform(X)
+        
+        # Разделение на обучающую и тестовую выборки
+        test_size = min(0.3, max(0.1, 1 - (3/len(X))))
+        X_train, X_test, y_train, y_test = train_test_split(
+            X_scaled, y, test_size=test_size, random_state=42
+        )
+        
+        # Обучение модели
+        self.model = RandomForestClassifier(n_estimators=100, random_state=42)
+        self.model.fit(X_train, y_train)
+        
+        # Оценка качества
+        y_pred = self.model.predict(X_test)
+        self.model_accuracy = accuracy_score(y_test, y_pred)
+        self.model_report = classification_report(y_test, y_pred)
+        
+        messagebox.showinfo("ML", f"✅ Модель обучена!\n"
+                                  f"📊 Размеченных объектов: {len(labeled_objects)}\n"
+                                  f"📊 Обучающая выборка: {len(X_train)}\n"
+                                  f"📊 Тестовая выборка: {len(X_test)}\n"
+                                  f"🎯 Точность на тесте: {self.model_accuracy:.2%}")
+        
+        self.show_ml_results()
+
+    def predict(self):
+        """Прогнозирование категорий для неразмеченных объектов"""
+        if not hasattr(self, 'model') or self.model is None:
+            messagebox.showwarning("Ошибка", "❌ Сначала обучите модель (ML / Обучение модели)")
+            return
+        
+        if not self.ints or not self.metrics:
+            messagebox.showwarning("Ошибка", "❌ Нет данных для прогнозирования")
+            return
+        
+        # Находим неразмеченные объекты
+        unlabeled_objects = [obj for obj in self.ints if obj not in self.manual_categories]
+        
+        if not unlabeled_objects:
+            messagebox.showinfo("Информация", "📋 Все объекты уже имеют назначенные категории")
+            return
+        
+        X = []
+        for int_obj in unlabeled_objects:
+            features = [self.experimental_data[int_obj].get(m, 0) for m in self.metrics]
+            X.append(features)
+        
+        X_scaled = self.scaler.transform(X)
+        
+        predictions = self.model.predict(X_scaled)
+        probabilities = self.model.predict_proba(X_scaled)
+        
+        result_text = "🔮 РЕЗУЛЬТАТЫ ПРОГНОЗИРОВАНИЯ:\n\n"
+        for i, int_obj in enumerate(unlabeled_objects):
+            prob = max(probabilities[i]) * 100
+            result_text += f"📌 {int_obj}\n"
+            result_text += f"   ➜ Прогноз: {predictions[i]}\n"
+            result_text += f"   ➜ Уверенность: {prob:.1f}%\n\n"
+        
+        messagebox.showinfo("Прогноз", result_text)
+        self.show_ml_results()
+
+    def show_ml_results(self):
+        """Отображение результатов ML на вкладке"""
+        for widget in self.ml_tab.winfo_children():
+            widget.destroy()
+        
+        if self.model is None:
+            label = tk.Label(self.ml_tab, text="🤖 Модель не обучена\n\n"
+                                              "1. Назначьте категории объектам в таблице (последний столбец)\n"
+                                              "2. Нажмите 'ML / Обучение модели'",
+                            font=('Arial', 12), bg=self.colors['bg'], fg=self.colors['fg'], 
+                            justify=tk.CENTER)
+            label.pack(expand=True)
+            return
+        
+        frame = tk.Frame(self.ml_tab, bg=self.colors['bg'])
+        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        title = tk.Label(frame, text="🤖 РЕЗУЛЬТАТЫ МАШИННОГО ОБУЧЕНИЯ", 
+                        font=('Arial', 14, 'bold'), bg=self.colors['bg'], fg=self.colors['accent'])
+        title.pack(pady=10)
+        
+        # Информация о модели
+        info_frame = tk.LabelFrame(frame, text="📊 ИНФОРМАЦИЯ О МОДЕЛИ", 
+                                  bg=self.colors['panel_bg'], fg=self.colors['fg'], padx=10, pady=5)
+        info_frame.pack(fill=tk.X, pady=10)
+        
+        labeled_count = len([obj for obj in self.ints if obj in self.manual_categories])
+        unlabeled_count = len(self.ints) - labeled_count
+        
+        info_text = f"""
+        🤖 Тип модели: Random Forest Classifier
+        🌳 Количество деревьев: 100
+        🎯 Точность на тестовых данных: {self.model_accuracy:.2%}
+        📊 Признаков: {len(self.metrics)}
+        📋 Размеченных объектов: {labeled_count}
+        🔮 Неразмеченных объектов: {unlabeled_count}
+        """
+        
+        info_label = tk.Label(info_frame, text=info_text, bg=self.colors['panel_bg'], 
+                              fg=self.colors['fg'], justify=tk.LEFT, font=('Arial', 9))
+        info_label.pack(anchor=tk.W)
+        
+        # Таблица прогнозов
+        unlabeled_objects = [obj for obj in self.ints if obj not in self.manual_categories]
+        
+        if unlabeled_objects:
+            prediction_frame = tk.LabelFrame(frame, text="🔮 ПРОГНОЗЫ ДЛЯ НЕРАЗМЕЧЕННЫХ ОБЪЕКТОВ", 
+                                            bg=self.colors['panel_bg'], fg=self.colors['fg'], padx=10, pady=5)
+            prediction_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+            
+            tree = ttk.Treeview(prediction_frame, columns=("prediction", "confidence"), height=10)
+            tree.heading("#0", text="Информационный объект")
+            tree.heading("prediction", text="Прогноз")
+            tree.heading("confidence", text="Уверенность")
+            tree.column("#0", width=200)
+            tree.column("prediction", width=150)
+            tree.column("confidence", width=150)
+            tree.pack(fill=tk.BOTH, expand=True)
+            
+            X = []
+            for int_obj in unlabeled_objects:
+                features = [self.experimental_data[int_obj].get(m, 0) for m in self.metrics]
+                X.append(features)
+            
+            X_scaled = self.scaler.transform(X)
+            predictions = self.model.predict(X_scaled)
+            probabilities = self.model.predict_proba(X_scaled)
+            
+            for i, int_obj in enumerate(unlabeled_objects):
+                confidence = max(probabilities[i]) * 100
+                tree.insert("", tk.END, text=int_obj, values=(predictions[i], f"{confidence:.1f}%"))
+        else:
+            label = tk.Label(frame, text="✅ Все объекты размечены! Прогнозов нет.", 
+                            bg=self.colors['bg'], fg=self.colors['success'],
+                            font=('Arial', 11))
+            label.pack(pady=20)
+
+    def zoom_tree_in(self):
+        self.tree_zoom_level = min(3.0, self.tree_zoom_level + 0.2)
+        self.draw_spanning_tree()
+        zoom_percent = int(self.tree_zoom_level * 100)
+        self.tree_zoom_label.config(text=f"Масштаб: {zoom_percent}%")
+
+    def zoom_tree_out(self):
+        self.tree_zoom_level = max(0.5, self.tree_zoom_level - 0.2)
+        self.draw_spanning_tree()
+        zoom_percent = int(self.tree_zoom_level * 100)
+        self.tree_zoom_label.config(text=f"Масштаб: {zoom_percent}%")
+
+    def reset_tree_zoom(self):
+        self.tree_zoom_level = 1.0
+        self.draw_spanning_tree()
+        self.tree_zoom_label.config(text="Масштаб: 100%")
+
+    def zoom_dendro_in(self):
+        self.dendro_zoom_level = min(3.0, self.dendro_zoom_level + 0.2)
+        self.draw_dendrogram()
+        zoom_percent = int(self.dendro_zoom_level * 100)
+        self.dendro_zoom_label.config(text=f"Масштаб: {zoom_percent}%")
+
+    def zoom_dendro_out(self):
+        self.dendro_zoom_level = max(0.5, self.dendro_zoom_level - 0.2)
+        self.draw_dendrogram()
+        zoom_percent = int(self.dendro_zoom_level * 100)
+        self.dendro_zoom_label.config(text=f"Масштаб: {zoom_percent}%")
+
+    def reset_dendro_zoom(self):
+        self.dendro_zoom_level = 1.0
+        self.draw_dendrogram()
+        self.dendro_zoom_label.config(text="Масштаб: 100%")
+
+    def draw_spanning_tree(self):
+        """Построение остовного дерева"""
+        if not self.ints or not self.metrics:
+            messagebox.showwarning("Ошибка", "❌ Нет данных для построения дерева")
+            return
+        
+        for widget in self.tree_scrollable_frame.winfo_children():
+            widget.destroy()
+        
+        try:
+            data_matrix = []
+            for int_obj in self.ints:
+                row = [self.experimental_data[int_obj].get(metric, 0) for metric in self.metrics]
+                data_matrix.append(row)
+            
+            from scipy.stats import pearsonr
+            
+            G = nx.Graph()
+            
+            for int_obj in self.ints:
+                G.add_node(int_obj)
+            
+            for i in range(len(self.ints)):
+                for j in range(i + 1, len(self.ints)):
+                    corr, _ = pearsonr(data_matrix[i], data_matrix[j])
+                    distance = 1 - abs(corr)
+                    G.add_edge(self.ints[i], self.ints[j], weight=distance)
+            
+            mst = nx.minimum_spanning_tree(G)
+            
+            fig_width = 16 * self.tree_zoom_level
+            fig_height = 9 * self.tree_zoom_level
+            
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(fig_width, fig_height))
+            fig.patch.set_facecolor(self.colors['bg'])
+            
+            pos = nx.spring_layout(mst, k=3, iterations=100)
+            
+            node_size = 2000 * self.tree_zoom_level
+            font_size = 11 * self.tree_zoom_level
+            edge_font_size = 9 * self.tree_zoom_level
+            
+            nx.draw_networkx_nodes(mst, pos, ax=ax1, node_color='lightblue', 
+                                  node_size=node_size, node_shape='o')
+            nx.draw_networkx_edges(mst, pos, ax=ax1, edge_color='gray', width=2, alpha=0.7)
+            nx.draw_networkx_labels(mst, pos, ax=ax1, font_size=font_size, font_weight='bold')
+            
+            edge_labels = {(u, v): f"{d['weight']:.3f}" for u, v, d in mst.edges(data=True)}
+            nx.draw_networkx_edge_labels(mst, pos, edge_labels=edge_labels, ax=ax1, font_size=edge_font_size)
+            
+            ax1.set_title("🌲 Минимальное остовное дерево\n(на основе корреляции)", 
+                         fontsize=14 * self.tree_zoom_level, fontweight='bold', pad=20)
+            ax1.axis('off')
+            ax1.set_facecolor(self.colors['bg'])
+            
+            corr_matrix = np.zeros((len(self.ints), len(self.ints)))
+            for i in range(len(self.ints)):
+                for j in range(len(self.ints)):
+                    corr, _ = pearsonr(data_matrix[i], data_matrix[j])
+                    corr_matrix[i, j] = corr
+            
+            im = ax2.imshow(corr_matrix, cmap='coolwarm', vmin=-1, vmax=1)
+            ax2.set_xticks(range(len(self.ints)))
+            ax2.set_yticks(range(len(self.ints)))
+            ax2.set_xticklabels(self.ints, rotation=45, ha='right', fontsize=9 * self.tree_zoom_level)
+            ax2.set_yticklabels(self.ints, fontsize=9 * self.tree_zoom_level)
+            ax2.set_title("📊 Матрица корреляции между объектами", 
+                         fontsize=14 * self.tree_zoom_level, fontweight='bold', pad=20)
+            
+            cbar = plt.colorbar(im, ax=ax2, shrink=0.8)
+            cbar.set_label('Коэффициент корреляции', fontsize=10 * self.tree_zoom_level)
+            
+            for i in range(len(self.ints)):
+                for j in range(len(self.ints)):
+                    text_color = 'white' if abs(corr_matrix[i, j]) > 0.6 else 'black'
+                    ax2.text(j, i, f'{corr_matrix[i, j]:.2f}',
+                            ha="center", va="center", color=text_color, 
+                            fontsize=9 * self.tree_zoom_level, weight='bold')
+            
+            plt.tight_layout()
+            
+            self.current_tree_fig = fig
+            canvas = FigureCanvasTkAgg(fig, master=self.tree_scrollable_frame)
+            canvas.draw()
+            canvas_widget = canvas.get_tk_widget()
+            canvas_widget.pack(fill=tk.BOTH, expand=True)
+            
+            self.tree_scrollable_frame.update_idletasks()
+            self.tree_canvas.configure(scrollregion=self.tree_canvas.bbox("all"))
+            
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"❌ Не удалось построить дерево: {str(e)}")
+
+    def draw_dendrogram(self):
+        """Построение дендрограммы"""
+        if not self.ints or not self.metrics:
+            messagebox.showwarning("Ошибка", "❌ Нет данных для построения дендрограммы")
+            return
+        
+        for widget in self.dendro_scrollable_frame.winfo_children():
+            widget.destroy()
+        
+        try:
+            data_matrix = []
+            for int_obj in self.ints:
+                row = [self.experimental_data[int_obj].get(metric, 0) for metric in self.metrics]
+                data_matrix.append(row)
+            
+            data_matrix = np.array(data_matrix)
+            
+            # Проверка на вариативность данных
+            for i in range(data_matrix.shape[1]):
+                if np.std(data_matrix[:, i]) == 0:
+                    data_matrix[:, i] += np.random.normal(0, 0.01, data_matrix.shape[0])
+            
+            # Нормализация
+            data_matrix = (data_matrix - data_matrix.mean(axis=0)) / data_matrix.std(axis=0)
+            
+            Z = linkage(data_matrix, method='ward')
+            
+            fig_width = 16 * self.dendro_zoom_level
+            fig_height = 10 * self.dendro_zoom_level
+            
+            fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+            fig.patch.set_facecolor(self.colors['bg'])
+            ax.set_facecolor(self.colors['bg'])
+            
+            leaf_font_size = 11 * self.dendro_zoom_level
+            
+            dendrogram(Z, labels=self.ints, ax=ax, leaf_rotation=45, 
+                      leaf_font_size=leaf_font_size, color_threshold=0.7*max(Z[:,2]),
+                      above_threshold_color='#4a90e2')
+            
+            ax.set_title("📊 Дендрограмма кластеризации объектов", 
+                        fontsize=16 * self.dendro_zoom_level, fontweight='bold', pad=20)
+            ax.set_xlabel("Информационные объекты", fontsize=12 * self.dendro_zoom_level, fontweight='bold')
+            ax.set_ylabel("Евклидово расстояние", fontsize=12 * self.dendro_zoom_level, fontweight='bold')
+            ax.grid(True, alpha=0.3, linestyle='--')
+            
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            ax.spines['left'].set_color(self.colors['fg'])
+            ax.spines['bottom'].set_color(self.colors['fg'])
+            ax.tick_params(colors=self.colors['fg'], labelsize=10 * self.dendro_zoom_level)
+            ax.xaxis.label.set_color(self.colors['fg'])
+            ax.yaxis.label.set_color(self.colors['fg'])
+            ax.title.set_color(self.colors['accent'])
+            
+            plt.tight_layout(pad=3.0)
+            
+            self.current_dendro_fig = fig
+            canvas = FigureCanvasTkAgg(fig, master=self.dendro_scrollable_frame)
+            canvas.draw()
+            canvas_widget = canvas.get_tk_widget()
+            canvas_widget.pack(fill=tk.BOTH, expand=True)
+            
+            self.dendro_scrollable_frame.update_idletasks()
+            self.dendro_canvas.configure(scrollregion=self.dendro_canvas.bbox("all"))
+            
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"❌ Не удалось построить дендрограмму: {str(e)}")
+
+    def make_decision(self):
+        if not self.ints or not self.metrics:
+            messagebox.showwarning("Ошибка", "❌ Нет данных для принятия решения")
+            return
+        
+        if not self.weights or any(w not in self.weights for w in self.metrics):
+            self.set_default_weights()
+        
+        scores = {}
+        for int_obj in self.ints:
+            score = 0
+            for metric in self.metrics:
+                value = self.experimental_data[int_obj].get(metric, 0)
+                weight = self.weights.get(metric, 1.0 / len(self.metrics))
+                score += value * weight
+            scores[int_obj] = score
+        
+        sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+        
+        for widget in self.decision_tab.winfo_children():
+            widget.destroy()
+        
+        frame = tk.Frame(self.decision_tab, bg=self.colors['bg'])
+        frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        
+        title = tk.Label(frame, text="💡 РЕКОМЕНДАЦИИ СИСТЕМЫ", 
+                        font=('Arial', 16, 'bold'), bg=self.colors['bg'], fg=self.colors['accent'])
+        title.pack(pady=10)
+        
+        best_obj = sorted_scores[0][0]
+        best_score = sorted_scores[0][1]
+        
+        rec_frame = tk.Frame(frame, bg=self.colors['panel_bg'], relief=tk.RAISED, bd=2)
+        rec_frame.pack(fill=tk.X, pady=10)
+        
+        tk.Label(rec_frame, text="🏆 ЛУЧШИЙ КАНДИДАТ", font=('Arial', 14, 'bold'),
+                bg=self.colors['panel_bg'], fg=self.colors['success']).pack(pady=10)
+        tk.Label(rec_frame, text=best_obj, font=('Arial', 18, 'bold'),
+                bg=self.colors['panel_bg'], fg=self.colors['accent']).pack()
+        tk.Label(rec_frame, text=f"📊 Итоговая оценка: {best_score:.2f}", font=('Arial', 12),
+                bg=self.colors['panel_bg'], fg=self.colors['fg']).pack(pady=5)
+        
+        if self.model is not None and best_obj not in self.manual_categories:
+            X = [[self.experimental_data[best_obj].get(m, 0) for m in self.metrics]]
+            X_scaled = self.scaler.transform(X)
+            pred = self.model.predict(X_scaled)[0]
+            prob = max(self.model.predict_proba(X_scaled)[0]) * 100
+            tk.Label(rec_frame, text=f"🤖 ML прогноз для кандидата: {pred} (уверенность: {prob:.1f}%)", 
+                    font=('Arial', 11), bg=self.colors['panel_bg'], fg=self.colors['warning']).pack(pady=5)
+        
+        rating_frame = tk.LabelFrame(frame, text="📊 РЕЙТИНГ ВСЕХ ОБЪЕКТОВ", 
+                                    font=('Arial', 12, 'bold'), bg=self.colors['panel_bg'], 
+                                    fg=self.colors['fg'], padx=10, pady=10)
+        rating_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+        
+        for i, (obj, score) in enumerate(sorted_scores, 1):
+            if i == 1:
+                color = '#27ae60'
+                medal = "🥇"
+            elif i == 2:
+                color = '#f39c12'
+                medal = "🥈"
+            elif i == 3:
+                color = '#3498db'
+                medal = "🥉"
+            else:
+                color = '#95a5a6'
+                medal = f"{i}."
+            
+            tk.Label(rating_frame, text=f"{medal} {obj}: {score:.2f}", font=('Arial', 11),
+                    bg=self.colors['panel_bg'], fg=color).pack(anchor=tk.W, pady=2)
+
+    def generate_report(self):
+        if not self.ints or not self.metrics:
+            messagebox.showwarning("Ошибка", "❌ Нет данных для отчета")
+            return
+        
+        report = "=" * 70 + "\n"
+        report += "📊 ИНТЕЛЛЕКТУАЛЬНАЯ СИСТЕМА ПОДДЕРЖКИ ПРИНЯТИЯ РЕШЕНИЙ\n"
+        report += "=" * 70 + "\n\n"
+        
+        from datetime import datetime
+        report += f"📅 Дата формирования: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        
+        report += "1️⃣ ОБЩАЯ ИНФОРМАЦИЯ\n"
+        report += "-" * 40 + "\n"
+        report += f"📌 Информационных объектов: {len(self.ints)}\n"
+        report += f"📌 Показателей: {len(self.metrics)}\n"
+        report += f"📌 Категорий: {len(self.categories)}\n\n"
+        
+        report += "2️⃣ СТАТИСТИКА ПОКАЗАТЕЛЕЙ\n"
+        report += "-" * 40 + "\n"
+        for metric in self.metrics:
+            values = [self.experimental_data[int_obj].get(metric, 0) for int_obj in self.ints]
+            avg = sum(values) / len(values)
+            max_val = max(values)
+            min_val = min(values)
+            max_obj = self.ints[values.index(max_val)]
+            min_obj = self.ints[values.index(min_val)]
+            report += f"\n📈 {metric}:\n"
+            report += f"   Среднее: {avg:.2f}\n"
+            report += f"   📈 Максимум: {max_val} ({max_obj})\n"
+            report += f"   📉 Минимум: {min_val} ({min_obj})\n"
+        
+        report += "\n3️⃣ РАЗМЕЧЕННЫЕ КАТЕГОРИИ ДЛЯ ML\n"
+        report += "-" * 40 + "\n"
+        if self.manual_categories:
+            for obj, cat in self.manual_categories.items():
+                report += f"📌 {obj}: {cat}\n"
+        else:
+            report += "❌ Нет размеченных категорий\n"
+        
+        if self.model is not None:
+            report += "\n4️⃣ РЕЗУЛЬТАТЫ МАШИННОГО ОБУЧЕНИЯ\n"
+            report += "-" * 40 + "\n"
+            report += f"🎯 Точность модели: {self.model_accuracy:.2%}\n"
+            report += f"\n📋 Детальный отчёт:\n{self.model_report}\n"
+        
+        if self.weights:
+            report += "\n5️⃣ ВЗВЕШЕННАЯ ОЦЕНКА (MCDM)\n"
+            report += "-" * 40 + "\n"
+            
+            scores = {}
+            for int_obj in self.ints:
+                score = sum(self.experimental_data[int_obj].get(m, 0) * self.weights.get(m, 1.0/len(self.metrics)) 
+                           for m in self.metrics)
+                scores[int_obj] = score
+            
+            sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+            best_obj = sorted_scores[0][0]
+            
+            report += f"\n💡 РЕКОМЕНДАЦИЯ: На основе анализа система рекомендует выбрать объект {best_obj}\n"
+            report += "\n🏆 Рейтинг объектов:\n"
+            for i, (obj, score) in enumerate(sorted_scores, 1):
+                report += f"   {i}. {obj}: {score:.2f}\n"
+        
+        report += "\n" + "=" * 70 + "\n"
+        report += "🏁 КОНЕЦ ОТЧЕТА\n"
+        
+        filename = filedialog.asksaveasfilename(
+            defaultextension=".txt",
+            filetypes=[("Текстовые файлы", "*.txt"), ("Все файлы", "*.*")],
+            title="Сохранить отчет"
+        )
+        
+        if filename:
+            try:
+                with open(filename, 'w', encoding='utf-8') as f:
+                    f.write(report)
+                messagebox.showinfo("Успех", f"✅ Отчет сохранен в файл: {filename}")
+            except Exception as e:
+                messagebox.showerror("Ошибка", f"❌ Не удалось сохранить отчет: {str(e)}")
+
+    def load_data(self):
+        filename = filedialog.askopenfilename(
+            filetypes=[("JSON файлы", "*.json"), ("Все файлы", "*.*")],
+            title="Выберите файл с данными"
+        )
+        
+        if filename:
+            try:
+                with open(filename, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                self.ints = data.get('ints', [])
+                self.metrics = data.get('metrics', [])
+                self.categories = data.get('categories', [])
+                self.weights = data.get('weights', {})
+                self.manual_categories = data.get('manual_categories', {})
+                
+                self.ints_listbox.delete(0, tk.END)
+                for int_obj in self.ints:
+                    self.ints_listbox.insert(tk.END, int_obj)
+                
+                self.metrics_listbox.delete(0, tk.END)
+                for metric in self.metrics:
+                    self.metrics_listbox.insert(tk.END, metric)
+                
+                self.categories_listbox.delete(0, tk.END)
+                for category in self.categories:
+                    self.categories_listbox.insert(tk.END, category)
+                
+                self.experimental_data = data.get('experimental_data', {})
+                self.update_table()
+                self.update_weights_tree()
+                self.model = None
+                
+                messagebox.showinfo("Успех", "✅ Данные успешно загружены")
+                
+            except Exception as e:
+                messagebox.showerror("Ошибка", f"❌ Не удалось загрузить данные: {str(e)}")
+
+    def save_data(self):
+        filename = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            filetypes=[("JSON файлы", "*.json"), ("Все файлы", "*.*")],
+            title="Сохранить данные"
+        )
+        
+        if filename:
+            data = {
+                'ints': self.ints,
+                'metrics': self.metrics,
+                'categories': self.categories,
+                'experimental_data': self.experimental_data,
+                'weights': self.weights,
+                'manual_categories': self.manual_categories
+            }
+            
+            try:
+                with open(filename, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, ensure_ascii=False, indent=4)
+                messagebox.showinfo("Успех", f"✅ Данные сохранены в файл: {filename}")
+            except Exception as e:
+                messagebox.showerror("Ошибка", f"❌ Не удалось сохранить данные: {str(e)}")
+
+    def load_sample_data(self):
+        self.ints = [
+            "Иванов И.И.",
+            "Петров П.П.",
+            "Сидоров С.С.",
+            "Кузнецова А.В.",
+            "Смирнова Е.Д."
+        ]
+        
+        self.metrics = [
+            "Успеваемость",
+            "Посещаемость",
+            "Активность",
+            "Курсовые работы",
+            "Экзамены"
+        ]
+        
+        self.categories = [
+            "Отличник",
+            "Хорошист",
+            "Троечник"
+        ]
+        
+        for int_obj in self.ints:
+            self.ints_listbox.insert(tk.END, int_obj)
+        
+        for metric in self.metrics:
+            self.metrics_listbox.insert(tk.END, metric)
+        
+        for category in self.categories:
+            self.categories_listbox.insert(tk.END, category)
+        
+        self.set_default_weights()
+        self.generate_random_data()
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = IntDecisionSystem(root)
+    root.mainloop()
